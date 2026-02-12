@@ -45,7 +45,7 @@ function initWidget() {
             cloudName: CLOUD_NAME,
             uploadPreset: UPLOAD_PRESET,
             clientAllowedFormats: ["png", "jpg", "jpeg", "heic"],
-            multiple: true,
+            multiple: false, // Changed to false to ensure single file public_id assignment works per file
             maxFiles: 10,
             sources: ['local', 'camera'],
             styles: {
@@ -87,7 +87,14 @@ function initWidget() {
                 // Tag format: notes_DD_MM_YYYY_hHOUR
                 const tag = `notes_${d[2]}_${d[1]}_${d[0]}_h${hour}`;
 
+                // Create a clean subject slug for the filename
+                const safeSubject = subject.replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
+                const uniqueId = new Date().getTime();
+
                 params.tags = [tag];
+                // Store subject in public_id as fallback
+                params.public_id = `${tag}_${safeSubject}_${uniqueId}`;
+
                 params.context = {
                     subject: subject,
                     description: description
@@ -183,17 +190,43 @@ async function fetchNotes() {
         let shownCount = 0;
 
         data.resources.forEach((img, index) => {
-            const subject = img.context && img.context.custom && img.context.custom.subject
-                ? img.context.custom.subject
-                : null;
+            // Robust context extraction
+            let contextData = {};
+            if (img.context) {
+                if (img.context.custom) {
+                    contextData = img.context.custom;
+                } else {
+                    contextData = img.context;
+                }
+            }
 
-            const description = img.context && img.context.custom && img.context.custom.description
-                ? img.context.custom.description
-                : "";
+            let subject = contextData.subject || null;
+            const description = contextData.description || "";
+
+            // Helper to normalize strings for robust comparison
+            const normalize = (str) => String(str || "").replace(/[^a-zA-Z0-9]/g, "").trim().toLowerCase();
+            const normFilter = normalize(filterSubject);
+
+            // Fallback: If subject context is missing, try to extract from public_id
+            if (!subject) {
+                if (filterSubject && img.public_id.toLowerCase().includes(normFilter)) {
+                    subject = "Matched via Filename";
+                }
+            }
+
+            const normSubject = normalize(subject);
+
+            console.log(`Checking Note: Subject="${subject}" vs Filter="${filterSubject}"`);
 
             // Apply Filter
-            if (filterSubject && subject !== filterSubject) {
-                return;
+            if (filterSubject) {
+                const idMatches = img.public_id.toLowerCase().includes(normFilter);
+                const contextMatches = normSubject.includes(normFilter);
+
+                // If neither context nor filename matches, skip
+                if (!idMatches && !contextMatches) {
+                    return;
+                }
             }
 
             const thumbUrl = `https://res.cloudinary.com/${CLOUD_NAME}/image/upload/c_thumb,w_400,q_auto,f_auto/v${img.version}/${img.public_id}.${img.format}`;
@@ -216,7 +249,7 @@ async function fetchNotes() {
         </a>
         <div class="note-info">
           <span class="time-tag">${uploadTime}</span>
-          <div class="note-subject">${subject || "General Note"}</div>
+          <div class="note-subject">${subject === "Matched via Filename" ? filterSubject : (subject || "General Note")}</div>
           <div class="note-desc">${description || ""}</div>
         </div>
       `;
